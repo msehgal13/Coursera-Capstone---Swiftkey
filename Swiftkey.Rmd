@@ -1,0 +1,244 @@
+---
+title: "Coursera Swiftkey Capstone Project - Milestone Report 1"
+author: "Manav Sehgal"
+date: "28th Feb, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Introduction
+
+This report is created for the Coursera Capstone Project for the Data Specialization course. In this project, we are going to create a predictive keyboard similar to Swiftkey.
+
+Swiftkey has partenered with Coursera and has provided the training data.
+
+##Executive Summary
+
+This is the first milestone report. In this week we have:
+
+1. Loaded the training dataset: [Data](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip)
+2. Cleaned the dataset by doing the following
+- Transformed all the letters to lower case. This is done to remove capitalization of words in our prediction model. For e.g. "In" and "in" should have the same prediction.
+- Removed punctuation - Our model is created only for the text words so removed punctuation so that it does not intefere in our model.
+- Removed number - Same as above, our model is created only for the text words.
+- Removed extra whitespaces - They are generally errors and are removed so that they are not interpreted as a word in our model
+- Removed profanity words - We don't want our model to predict profanity words so removed them from the training data set
+
+*Note: - I have not removed stopwords (words such as "a", "the" etc) from the training data set because we want our model to predict them*
+
+Post data set cleanup we did some exploratory analysis on the data set and can derive the following inferences.
+
+1. The three datasets combined contain about 200k unique words. Out of these about 130k words appear more than once which constitute 98% of the overall words used.
+2. The number of unique phrases increases as the degree of the ngram increases. For Fivegram, the number of unique phrases which are used more than once constitute only 3.5% of all the 5 word phrases.
+3. Words such as the, to, a, and etc appear to be the most common which is expected as they are stop words in the english language used to connect words to form a sentence.
+4. The combination of the stopwords dominate the higher level ngrams as well with "at the end of the" being the most common fivegram
+
+##Data Loading and Cleanup
+
+For our model we will use the English datasets - news, blogs and twitter.
+
+```{r datadownload,message=FALSE,warning=FALSE,results='hide'}
+
+#Set the system locale to UTF-8. This is done to correctly output special characters
+Sys.setlocale("LC_CTYPE", "en_US.UTF-8")
+
+#Set the working directory
+setwd("~/Documents/Work/Study/Coursera/Data-Scientist/datasciencecoursera/Capstone Project - Swiftkey")
+
+#Download the file
+url<-"https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+file_name<-"Coursera-SwiftKey.zip"
+if(!file.exists(file_name)){
+        download.file(url,file_name,method="curl")
+}
+#Create folder names
+folder<-"final"
+#Unzip the dataset
+if(!dir.exists(folder)){
+        unzip(file_name)
+}
+
+prof_file<-"/Users/manavsehgal/Documents/Work/Study/DataScientist/Profanity/en"
+prof_data<-read.table(prof_file,sep="\n",colClasses = "character")
+```
+
+We can load the entire dataset but given the size, we would only need a sample of it. The distribution of a random sample should be the same as the entire dataset. For our purpose 10% of the dataset will work.
+
+In the next step, we will read a chunk of each dataset at a time and use 50% probability to decide if we need to load the chunk or not. This is done so that we have a random dataset and conserve some time by reading a chunk of a data at a time.
+
+Note that we are not reading the entire dataset and then selecting a random sample. The reason for this is to use minimal memory. Reading a large dataset will require a lot of space and we want to avoid that.
+
+I have created a function to read a sample of the data and strips the data set of extra whitespaces, foreign words and punctuations. do this for any dataset.
+
+```{r dataloadclean,message=FALSE,warning=FALSE,cache=TRUE}
+fileToSample<-function(filename,perc=0.1){
+set.seed(2)
+#Load libraries
+library(readr)        
+
+#Calculate the total size of the file
+total_rows<-as.numeric(system(paste0("wc -l<",filename),intern = TRUE))
+#Calculate the chunk size required
+chunk_size<-max(floor(total_rows*perc/10),1)
+#Create a vector to hold the data
+data_read<-c()
+#create a probability vector
+prob<-rbinom(ceiling(total_rows/chunk_size),1,perc)
+index<-which(prob==1)
+#Run a loop to read a sample of the file.
+for(i in index){
+        data_read<-c(data_read,read_lines(filename,n_max = chunk_size,skip=chunk_size*(i-1)))
+}
+
+#Clean the dataset
+data_read<-gsub("[0-9[:punct:]]","",data_read)#Remove numbers and punctiaons
+data_read<-gsub(paste(prof_data$V1,collapse="|"),"",data_read)#remove profanity words
+data_read<-gsub("[^a-zA-Z0-9[:punct:][:space:]]","",data_read)#Remove foreign words
+data_read<-gsub("[[:space:]]{2,}"," ",data_read)#Remove extra whitespaces
+
+#Return the final dataset
+return(data_read)
+}
+```
+
+Let's run the function on the english datasets to load them
+
+```{r dataload,message=FALSE,warning=FALSE,cache=TRUE}
+#load libraries
+library(tibble)
+
+set.seed(2)
+en_US_twitter_Sample<-fileToSample("final/en_US/en_US.twitter.txt")
+en_US_blogs_Sample<-fileToSample("final/en_US/en_US.blogs.txt")
+en_US_news_Sample<-fileToSample("final/en_US/en_US.news.txt")
+
+#Combine the files and convert into a tibble
+en_US_Sample<-c(en_US_twitter_Sample,en_US_blogs_Sample,en_US_news_Sample)
+en_US_Sample<-tibble(en_US_Sample)
+rm(en_US_twitter_Sample)
+rm(en_US_blogs_Sample)
+rm(en_US_news_Sample)
+```
+
+We now have a combined data set for english language that we will use for further analysis.
+The next step is to break down the sentences into words of 1,2 3 etc groups and count the frequencies. This is called tokenization. We will use the unnest_tokens function for this purpose as it automatically removes punctuations, converts the text into lower case etc.
+
+```{r ngrams,message=FALSE,warning=FALSE,cache=TRUE}
+#Load libraries
+library(tidytext)
+library(dplyr)
+
+#Create Unigram tokens
+en_US_Sample_Unigram<-unnest_tokens(en_US_Sample,word,en_US_Sample,token='ngrams',n=1)
+en_US_Sample_Bigram<-unnest_tokens(en_US_Sample,word,en_US_Sample,token='ngrams',n=2)
+en_US_Sample_Trigram<-unnest_tokens(en_US_Sample,word,en_US_Sample,token='ngrams',n=3)
+en_US_Sample_Fourgram<-unnest_tokens(en_US_Sample,word,en_US_Sample,token='ngrams',n=4)
+en_US_Sample_Fivegram<-unnest_tokens(en_US_Sample,word,en_US_Sample,token='ngrams',n=5)
+#Count Unigram word frequencies
+en_US_Sample_Unigram_count<-en_US_Sample_Unigram%>%group_by(word)%>%count(sort=T)
+en_US_Sample_Bigram_count<-en_US_Sample_Bigram%>%group_by(word)%>%count(sort=T)
+en_US_Sample_Trigram_count<-en_US_Sample_Trigram%>%group_by(word)%>%count(sort=T)
+en_US_Sample_Fourgram_count<-en_US_Sample_Fourgram%>%group_by(word)%>%count(sort=T)
+en_US_Sample_Fivegram_count<-en_US_Sample_Fivegram%>%group_by(word)%>%count(sort=T)
+```
+
+##Exploratory Analysis
+
+We will now do some basic analysis to understand our data better. The high level summary is below
+
+```{r explorbasic,message=FALSE,warning=FALSE,cache=TRUE, echo=FALSE}
+library(knitr)
+
+#Data Summary Table
+total_rows<-as.numeric(system(paste0("wc -l<","final/en_US/en_US.twitter.txt"),intern = TRUE))+as.numeric(system(paste0("wc -l<","final/en_US/en_US.news.txt"),intern = TRUE))+as.numeric(system(paste0("wc -l<","final/en_US/en_US.blogs.txt"),intern = TRUE))
+sample_rows<-dim(en_US_Sample)[1]
+sample_rows<-rep(sample_rows,5)
+total_rows<-rep(total_rows,5)
+
+unique<-c(dim(en_US_Sample_Unigram_count)[1],dim(en_US_Sample_Bigram_count)[1],dim(en_US_Sample_Trigram_count)[1],dim(en_US_Sample_Fourgram_count)[1],dim(en_US_Sample_Fivegram_count)[1])
+
+num_50perc<-c(length(which(cumsum(prop.table(en_US_Sample_Unigram_count$n))<=0.5)),length(which(cumsum(prop.table(en_US_Sample_Bigram_count$n))<=0.5)),length(which(cumsum(prop.table(en_US_Sample_Trigram_count$n))<=0.5)),length(which(cumsum(prop.table(en_US_Sample_Fourgram_count$n))<=0.5)),length(which(cumsum(prop.table(en_US_Sample_Fivegram_count$n))<=0.5)))
+
+num_90perc<-c(length(which(cumsum(prop.table(en_US_Sample_Unigram_count$n))<=0.9)),length(which(cumsum(prop.table(en_US_Sample_Bigram_count$n))<=0.9)),length(which(cumsum(prop.table(en_US_Sample_Trigram_count$n))<=0.9)),length(which(cumsum(prop.table(en_US_Sample_Fourgram_count$n))<=0.9)),length(which(cumsum(prop.table(en_US_Sample_Fivegram_count$n))<=0.9)))
+
+num_single<-c(dim(en_US_Sample_Unigram_count[en_US_Sample_Unigram_count$n==1,])[1],dim(en_US_Sample_Bigram_count[en_US_Sample_Bigram_count$n==1,])[1],dim(en_US_Sample_Trigram_count[en_US_Sample_Trigram_count$n==1,])[1],dim(en_US_Sample_Fourgram_count[en_US_Sample_Fourgram_count$n==1,])[1],dim(en_US_Sample_Fivegram_count[en_US_Sample_Fivegram_count$n==1,])[1])
+
+num_multi<-c(dim(en_US_Sample_Unigram_count[en_US_Sample_Unigram_count$n>1,])[1],dim(en_US_Sample_Bigram_count[en_US_Sample_Bigram_count$n>1,])[1],dim(en_US_Sample_Trigram_count[en_US_Sample_Trigram_count$n>1,])[1],dim(en_US_Sample_Fourgram_count[en_US_Sample_Fourgram_count$n>1,])[1],dim(en_US_Sample_Fivegram_count[en_US_Sample_Fivegram_count$n>1,])[1])
+
+perc_multi<-c(sum(en_US_Sample_Unigram_count$n[1:num_multi[1]])/sum(en_US_Sample_Unigram_count$n),sum(en_US_Sample_Bigram_count$n[1:num_multi[2]])/sum(en_US_Sample_Bigram_count$n),sum(en_US_Sample_Trigram_count$n[1:num_multi[3]])/sum(en_US_Sample_Trigram_count$n),sum(en_US_Sample_Fourgram_count$n[1:num_multi[4]])/sum(en_US_Sample_Fourgram_count$n),sum(en_US_Sample_Fivegram_count$n[1:num_multi[5]])/sum(en_US_Sample_Fivegram_count$n))*100
+
+summ<-data.frame(total_rows=total_rows,sample_rows=sample_rows,unique=unique,num_50perc=num_50perc,num_90perc=num_90perc,num_single=num_single,num_multi=num_multi,perc_multi=perc_multi)
+rownames(summ)<- c("Unigram","Bigram","Trigram","Fourgram","Fivegram")
+kable(summ,caption="Basic data summary",align="c",format.args = list(big.mark=","),row.names =TRUE,digits=2)
+```
+
+From the summary we can see that most of the single words/phrases constitute less than 1% of the total number of words for Unigrams but this is not the case for higher degrees. The perc of words/phrases which appear more than once decreases as the degree increases. Therefore, we will use the entire dataset for prediction.
+
+The total unique words in our sample is **`r format(dim(en_US_Sample_Unigram_count)[1],big.mark=",")`** which is a good number considering the unique words in Shakespeare's work is ~29k  [(source)](https://www.opensourceshakespeare.org/stats/). However, we should note that the unique numbers may contain incorrect/misspelled words as well.
+
+Let's now look at the ngrams individually
+
+```{r explorngrams,message=FALSE,warning=FALSE,cache=TRUE}
+library(ggplot2)
+library(RColorBrewer)
+library(wordcloud)
+
+#Unigrams
+ggplot(en_US_Sample_Unigram_count[1:20,],mapping=aes(x=en_US_Sample_Unigram_count$word[1:20],y=en_US_Sample_Unigram_count$n[1:20]))+geom_col()+theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))+labs(x="words",y="frequency",title="Histogram of top 20 Unigrams")
+pal <- brewer.pal(12,"Dark2")
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Wordcloud of top 100 unigrams")
+wordcloud(en_US_Sample_Unigram_count$word,en_US_Sample_Unigram_count$n,max.words = 100,random.color = TRUE,colors = pal)
+
+#Bigrams
+ggplot(en_US_Sample_Bigram_count[1:20,],mapping=aes(x=en_US_Sample_Bigram_count$word[1:20],y=en_US_Sample_Bigram_count$n[1:20]))+geom_col()+theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))+labs(x="words",y="frequency",title="Histogram of top 20 Bigrams")
+pal <- brewer.pal(12,"Dark2")
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Wordcloud of top 50 bigrams")
+wordcloud(en_US_Sample_Bigram_count$word,en_US_Sample_Bigram_count$n,max.words = 50,random.color = TRUE,colors = pal)
+
+#Trigrams
+ggplot(en_US_Sample_Trigram_count[1:20,],mapping=aes(x=en_US_Sample_Trigram_count$word[1:20],y=en_US_Sample_Trigram_count$n[1:20]))+geom_col()+theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))+labs(x="words",y="frequency",title="Histogram of top 20 Trigrams")
+pal <- brewer.pal(12,"Dark2")
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Wordcloud of top 30 trigrams")
+wordcloud(en_US_Sample_Trigram_count$word,en_US_Sample_Trigram_count$n,max.words = 30,random.color = TRUE,colors = pal)
+
+#Fourgrams
+ggplot(en_US_Sample_Fourgram_count[1:20,],mapping=aes(x=en_US_Sample_Fourgram_count$word[1:20],y=en_US_Sample_Fourgram_count$n[1:20]))+geom_col()+theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))+labs(x="words",y="frequency",title="Histogram of top 20 Fourgrams")
+pal <- brewer.pal(12,"Dark2")
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Wordcloud of top 25 fourgrams")
+wordcloud(en_US_Sample_Fourgram_count$word,en_US_Sample_Fourgram_count$n,max.words = 25,random.color = TRUE,colors = pal)
+
+#Fivegrams
+ggplot(en_US_Sample_Fivegram_count[1:20,],mapping=aes(x=en_US_Sample_Fivegram_count$word[1:20],y=en_US_Sample_Fivegram_count$n[1:20]))+geom_col()+theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))+labs(x="words",y="frequency",title="Histogram of top 20 Fivegrams")
+pal <- brewer.pal(12,"Dark2")
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Wordcloud of top 25 Fivegrams")
+wordcloud(en_US_Sample_Fivegram_count$word,en_US_Sample_Fivegram_count$n,max.words = 25,random.color = TRUE,colors = pal)
+```
+
+#Modelling
+
+Now that we have cleaned our data and looked at some exploratory analysis, we will create a prediction model using Ngrams. For this purpose we will use the Katz's backoff model to incorporate unseen ngrams in the input text
+
+Katz's backoff model states that if a ngram taken from the input string is present in our corpora then we can assign the probability of a given last term in our ngram as : Number of times the ngram appears in the corpora/ Number of times first terms (without the last word) appears in the corpora discounted by a factor (<1) which is estimated using Good Turing.
+
+The discounting is done to smooth out the probability of all the ngrams so that we can assign a probability to ngrams which do not appear in the corpora by going down the degree.
+
+If the ngram is not found in the corpora then we go down to the lower degrees and calculate the probability of the next term using the left over probability (left over in the first step).
+

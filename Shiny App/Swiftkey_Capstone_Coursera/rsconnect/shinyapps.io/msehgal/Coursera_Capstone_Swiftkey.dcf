@@ -1,0 +1,13 @@
+name: Coursera_Capstone_Swiftkey
+title: Coursera_Capstone_Swiftkey
+username:
+account: msehgal
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 315027
+bundleId: 1301511
+url: https://msehgal.shinyapps.io/Coursera_Capstone_Swiftkey/
+when: 1522839196.09695
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: bigram.RData|bigram.csv|prediction_old.R|prof_data.RData|prof_data.csv|trigram.RData|trigram.csv|unigram.RData|unigram.csv
